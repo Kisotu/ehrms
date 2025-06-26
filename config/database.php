@@ -54,6 +54,7 @@ class Database {
             
             // Set timezone
             $this->connection->query("SET time_zone = '+00:00'");
+            echo "Database connected successfully!";
             
         } catch (mysqli_sql_exception $e) {
             error_log("Database connection failed: " . $e->getMessage());
