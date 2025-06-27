@@ -4,227 +4,293 @@
 // Start session
 session_start();
 
-// Error reporting for development (remove in production)
+// Set error reporting for development
 error_reporting(E_ALL);
 ini_set('display_errors', 1);
 
-// Define constants
+// Define base paths
 define('BASE_PATH', dirname(__DIR__));
-define('APP_PATH', BASE_PATH . '/app');
-define('CONFIG_PATH', BASE_PATH . '/config');
 define('PUBLIC_PATH', __DIR__);
+define('VIEWS_PATH', BASE_PATH . '/views');
+define('CONTROLLERS_PATH', BASE_PATH . '/controllers');
+define('CONFIG_PATH', BASE_PATH . '/config');
 
-// Autoloader for classes
+// Simple autoloader for classes
 spl_autoload_register(function ($class) {
-    $file = APP_PATH . '/' . str_replace('\\', '/', $class) . '.php';
+    $file = CONTROLLERS_PATH . '/' . $class . '.php';
     if (file_exists($file)) {
         require_once $file;
     }
 });
 
-// Load configuration
-$config = [];
-if (file_exists(CONFIG_PATH . '/app.php')) {
-    $config = require CONFIG_PATH . '/app.php';
-}
-
-try {
-    // Get the requested URI
-    $requestUri = $_SERVER['REQUEST_URI'];
-    $requestMethod = $_SERVER['REQUEST_METHOD'];
+class Router {
+    private $routes = [];
+    private $currentRoute = '';
     
-    // Remove query string and decode URI
-    $path = parse_url($requestUri, PHP_URL_PATH);
-    $path = urldecode($path);
-    
-    // Remove base path if running in subdirectory
-    $basePath = dirname($_SERVER['SCRIPT_NAME']);
-    if ($basePath !== '/') {
-        $path = str_replace($basePath, '', $path);
+    public function __construct() {
+        $this->currentRoute = $this->getCurrentRoute();
     }
     
-    // Remove trailing slash except for root
-    $path = rtrim($path, '/') ?: '/';
-    
-    // Basic routing
-    switch ($path) {
-        case '/':
-        case '/home':
-            handleHome();
-            break;
-            
-        case '/login':
-            handleLogin();
-            break;
-            
-        case '/logout':
-            handleLogout();
-            break;
-            
-        case '/dashboard':
-            requireAuth();
-            handleDashboard();
-            break;
-            
-        case '/employees':
-            requireAuth();
-            handleEmployees();
-            break;
-            
-        case '/attendance':
-            requireAuth();
-            handleAttendance();
-            break;
-            
-        case '/leave':
-            requireAuth();
-            handleLeave();
-            break;
-            
-        case '/payroll':
-            requireAuth();
-            handlePayroll();
-            break;
-            
-        case '/reports':
-            requireAuth();
-            handleReports();
-            break;
-            
-        case '/admin':
-            requireAuth();
-            requireAdmin();
-            handleAdmin();
-            break;
-            
-        default:
-            handle404();
-            break;
-    }
-
-} catch (Exception $e) {
-    // Log error and show generic error page
-    error_log("Application Error: " . $e->getMessage());
-    handleError($e);
-}
-
-// Route handler functions
-function handleHome() {
-    if (isLoggedIn()) {
-        redirect('/dashboard');
-    }
-    include APP_PATH . '/views/home.php';
-}
-
-function handleLogin() {
-    if ($_SERVER['REQUEST_METHOD'] === 'POST') {
-        // Handle login form submission
-        $username = $_POST['username'] ?? '';
-        $password = $_POST['password'] ?? '';
+    private function getCurrentRoute() {
+        $uri = $_SERVER['REQUEST_URI'];
+        $path = parse_url($uri, PHP_URL_PATH);
         
-        // TODO: Implement authentication logic
-        if (authenticate($username, $password)) {
-            redirect('/dashboard');
-        } else {
-            $error = 'Invalid credentials';
-            include APP_PATH . '/views/login.php';
+        // Remove the project folder from path if it exists
+        $basePath = '/simbiri-ehrms/public';
+        if (strpos($path, $basePath) === 0) {
+            $path = substr($path, strlen($basePath));
         }
-    } else {
-        include APP_PATH . '/views/login.php';
+        
+        return trim($path, '/');
+    }
+    
+    public function get($route, $handler) {
+        $this->addRoute('GET', $route, $handler);
+    }
+    
+    public function post($route, $handler) {
+        $this->addRoute('POST', $route, $handler);
+    }
+    
+    private function addRoute($method, $route, $handler) {
+        $this->routes[] = [
+            'method' => $method,
+            'route' => trim($route, '/'),
+            'handler' => $handler
+        ];
+    }
+    
+    public function dispatch() {
+        $requestMethod = $_SERVER['REQUEST_METHOD'];
+        $matchedRoute = null;
+        
+        foreach ($this->routes as $route) {
+            if ($route['method'] === $requestMethod && $this->matchRoute($route['route'], $this->currentRoute)) {
+                $matchedRoute = $route;
+                break;
+            }
+        }
+        
+        if ($matchedRoute) {
+            $this->executeHandler($matchedRoute['handler']);
+        } else {
+            $this->handle404();
+        }
+    }
+    
+    private function matchRoute($routePattern, $currentRoute) {
+        // Simple exact match for now - can be extended for parameters
+        return $routePattern === $currentRoute;
+    }
+    
+    private function executeHandler($handler) {
+        if (is_callable($handler)) {
+            call_user_func($handler);
+        } elseif (is_string($handler)) {
+            // Handle controller@method format
+            if (strpos($handler, '@') !== false) {
+                list($controller, $method) = explode('@', $handler);
+                $controllerClass = $controller . 'Controller';
+                
+                if (class_exists($controllerClass)) {
+                    $controllerInstance = new $controllerClass();
+                    if (method_exists($controllerInstance, $method)) {
+                        $controllerInstance->$method();
+                        return;
+                    }
+                }
+            }
+            
+            // Handle direct view rendering
+            $this->renderView($handler);
+        }
+    }
+    
+    private function renderView($view, $data = []) {
+        $viewFile = VIEWS_PATH . '/' . $view . '.php';
+        
+        if (file_exists($viewFile)) {
+            extract($data);
+            include $viewFile;
+        } else {
+            $this->handle404();
+        }
+    }
+    
+    private function handle404() {
+        http_response_code(404);
+        echo '<h1>404 - Page Not Found</h1>';
+        echo '<p>The requested page could not be found.</p>';
     }
 }
 
-function handleLogout() {
-    session_destroy();
-    redirect('/login');
+// Helper functions
+function redirect($url) {
+    header("Location: $url");
+    exit;
 }
 
-function handleDashboard() {
-    include APP_PATH . '/views/dashboard.php';
+function view($viewName, $data = []) {
+    $viewFile = VIEWS_PATH . '/' . $viewName . '.php';
+    
+    if (file_exists($viewFile)) {
+        extract($data);
+        include $viewFile;
+    } else {
+        throw new Exception("View not found: $viewName");
+    }
 }
 
-function handleEmployees() {
-    include APP_PATH . '/views/employees/index.php';
-}
-
-function handleAttendance() {
-    include APP_PATH . '/views/attendance/index.php';
-}
-
-function handleLeave() {
-    include APP_PATH . '/views/leave/index.php';
-}
-
-function handlePayroll() {
-    include APP_PATH . '/views/payroll/index.php';
-}
-
-function handleReports() {
-    include APP_PATH . '/views/reports/index.php';
-}
-
-function handleAdmin() {
-    include APP_PATH . '/views/admin/index.php';
-}
-
-function handle404() {
-    http_response_code(404);
-    include APP_PATH . '/views/errors/404.php';
-}
-
-function handleError($exception) {
-    http_response_code(500);
-    include APP_PATH . '/views/errors/500.php';
-}
-
-// Utility functions
 function isLoggedIn() {
-    return isset($_SESSION['user_id']) && !empty($_SESSION['user_id']);
+    return isset($_SESSION['user_id']);
 }
 
 function requireAuth() {
     if (!isLoggedIn()) {
-        redirect('/login');
+        redirect('/simbiri-ehrms/public/login');
     }
 }
 
-function requireAdmin() {
-    if (!isset($_SESSION['user_role']) || $_SESSION['user_role'] !== 'admin') {
-        http_response_code(403);
-        include APP_PATH . '/views/errors/403.php';
-        exit;
-    }
-}
+// Initialize router
+$router = new Router();
 
-function authenticate($username, $password) {
-    // TODO: Implement database authentication
-    // This is a placeholder - replace with actual database logic
-    if ($username === 'admin' && $password === 'password') {
+// Define routes
+$router->get('', function() {
+    if (isLoggedIn()) {
+        redirect('/simbiri-ehrms/public/dashboard');
+    } else {
+        redirect('/simbiri-ehrms/public/login');
+    }
+});
+
+$router->get('login', function() {
+    if (isLoggedIn()) {
+        redirect('/simbiri-ehrms/public/dashboard');
+    }
+    view('auth/login');
+});
+
+$router->post('login', function() {
+    // Handle login form submission
+    $username = $_POST['username'] ?? '';
+    $password = $_POST['password'] ?? '';
+    $role = $_POST['role'] ?? 'employee';
+    
+    // Simple authentication logic (replace with proper database authentication)
+    if (!empty($username) && !empty($password)) {
+        // TODO: Verify credentials against database
+        // For now, accept any non-empty credentials
         $_SESSION['user_id'] = 1;
         $_SESSION['username'] = $username;
-        $_SESSION['user_role'] = 'admin';
-        return true;
+        $_SESSION['role'] = $role;
+        
+        // Redirect based on role
+        if ($role === 'admin') {
+            redirect('/simbiri-ehrms/public/admin/dashboard');
+        } else {
+            redirect('/simbiri-ehrms/public/dashboard');
+        }
+    } else {
+        // Redirect back to login with error
+        $_SESSION['error'] = 'Please fill in all fields';
+        redirect('/simbiri-ehrms/public/login');
     }
-    return false;
-}
+});
 
-function redirect($path) {
-    $baseUrl = getBaseUrl();
-    header("Location: $baseUrl$path");
-    exit;
-}
+$router->get('logout', function() {
+    session_destroy();
+    redirect('/simbiri-ehrms/public/login');
+});
 
-function getBaseUrl() {
-    $protocol = isset($_SERVER['HTTPS']) && $_SERVER['HTTPS'] === 'on' ? 'https' : 'http';
-    $host = $_SERVER['HTTP_HOST'];
-    $basePath = dirname($_SERVER['SCRIPT_NAME']);
-    return $protocol . '://' . $host . ($basePath !== '/' ? $basePath : '');
-}
+$router->get('dashboard', function() {
+    requireAuth();
+    
+    if ($_SESSION['role'] === 'admin') {
+        redirect('/simbiri-ehrms/public/admin/dashboard');
+    }
+    
+    // Employee dashboard
+    view('employee/dashboard', [
+        'username' => $_SESSION['username']
+    ]);
+});
 
-function asset($path) {
-    return getBaseUrl() . '/assets/' . ltrim($path, '/');
-}
+$router->get('admin/dashboard', function() {
+    requireAuth();
+    
+    if ($_SESSION['role'] !== 'admin') {
+        redirect('/simbiri-ehrms/public/dashboard');
+    }
+    
+    view('admin/dashboard', [
+        'username' => $_SESSION['username']
+    ]);
+});
 
-function url($path) {
-    return getBaseUrl() . '/' . ltrim($path, '/');
+// Employee routes
+$router->get('profile', function() {
+    requireAuth();
+    view('employee/profile');
+});
+
+$router->get('attendance', function() {
+    requireAuth();
+    view('employee/attendance');
+});
+
+$router->get('payroll', function() {
+    requireAuth();
+    view('employee/payroll');
+});
+
+// Admin routes
+$router->get('admin/employees', function() {
+    requireAuth();
+    if ($_SESSION['role'] !== 'admin') {
+        redirect('/simbiri-ehrms/public/dashboard');
+    }
+    view('admin/employees');
+});
+
+$router->get('admin/reports', function() {
+    requireAuth();
+    if ($_SESSION['role'] !== 'admin') {
+        redirect('/simbiri-ehrms/public/dashboard');
+    }
+    view('admin/reports');
+});
+
+// API routes for AJAX requests
+$router->post('api/attendance/checkin', function() {
+    requireAuth();
+    header('Content-Type: application/json');
+    
+    // TODO: Implement check-in logic
+    echo json_encode([
+        'success' => true,
+        'message' => 'Checked in successfully',
+        'time' => date('Y-m-d H:i:s')
+    ]);
+});
+
+$router->post('api/attendance/checkout', function() {
+    requireAuth();
+    header('Content-Type: application/json');
+    
+    // TODO: Implement check-out logic
+    echo json_encode([
+        'success' => true,
+        'message' => 'Checked out successfully',
+        'time' => date('Y-m-d H:i:s')
+    ]);
+});
+
+// Handle the request
+try {
+    $router->dispatch();
+} catch (Exception $e) {
+    error_log($e->getMessage());
+    http_response_code(500);
+    echo '<h1>500 - Internal Server Error</h1>';
+    echo '<p>Something went wrong. Please try again later.</p>';
 }
